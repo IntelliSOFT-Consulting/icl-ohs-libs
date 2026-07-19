@@ -1,0 +1,38 @@
+{
+  "realm": "icl-realm",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": __ACCESS_TOKEN_LIFESPAN_SECONDS__,
+  "ssoSessionIdleTimeout": __REFRESH_TOKEN_LIFESPAN_SECONDS__,
+  "clients": [
+    {
+      "clientId": "icl-backend",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "change-me",
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["*"]
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "MOH_ADMIN" },
+      { "name": "FACILITY_NURSE" },
+      { "name": "SUPER_ADMIN" }
+    ]
+  },
+  "users": [
+    {
+      "username": "demo.nurse",
+      "enabled": true,
+      "email": "demo.nurse@icl.local",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Nurse",
+      "credentials": [{ "type": "password", "value": "demo1234", "temporary": false }],
+      "realmRoles": ["FACILITY_NURSE"]
+    }
+  ]
+}

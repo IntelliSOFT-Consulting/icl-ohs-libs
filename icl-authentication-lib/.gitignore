@@ -1,0 +1,31 @@
+# Secrets / local environment
+.env
+local.properties
+
+# Generated at container startup from icl-realm.json.template (see docker-compose.yml)
+realm-export/icl-realm.json
+
+# Gradle
+.gradle/
+build/
+.kotlin/
+out/
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+
+# Claude Code local session config (per-user tool permissions) - never shared
+.claude/
+.claude.json
+.claude.json.backup
+CLAUDE.local.md
+
+# Claude-generated working docs / exports - local only, not part of the repo
+CLAUDE.md
+task.md
+jira-tickets.csv
+review.md

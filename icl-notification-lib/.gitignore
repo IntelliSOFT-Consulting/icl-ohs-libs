@@ -1,0 +1,28 @@
+# Secrets / local environment
+.env
+local.properties
+
+# Gradle
+.gradle/
+build/
+.kotlin/
+out/
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+
+# Claude Code local session config (per-user tool permissions) - never shared
+.claude/
+.claude.json
+.claude.json.backup
+CLAUDE.local.md
+
+# Claude-generated working docs - local only, not part of the repo
+CLAUDE.md
+task.md
+jira-tickets.csv
+review.md
