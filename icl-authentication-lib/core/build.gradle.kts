@@ -83,6 +83,9 @@ kotlin {
 
                 implementation(libs.java.jwt)
                 implementation(libs.jwks.rsa)
+
+                implementation(libs.flyway.core)
+                implementation(libs.flyway.postgresql)
             }
         }
         val jvmTest by getting {

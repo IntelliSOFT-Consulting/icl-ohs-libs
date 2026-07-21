@@ -3,10 +3,12 @@ package ke.intellisoft.icl.auth.security
 import com.auth0.jwk.JwkProvider
 import com.auth0.jwk.JwkProviderBuilder
 import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
 import com.auth0.jwt.interfaces.DecodedJWT
 import com.auth0.jwt.interfaces.Payload
 import ke.intellisoft.icl.auth.config.AuthConfig
 import java.net.URL
+import java.security.interfaces.RSAPublicKey
 import java.util.concurrent.TimeUnit
 
 /**
@@ -31,6 +33,14 @@ class JwtVerifier(val jwkProvider: JwkProvider, val issuer: String) {
 
     /** Unverified decode - Keycloak's own token-endpoint call remains the real validity check. */
     fun decodeUnverified(token: String): DecodedJWT = JWT.decode(token)
+
+    /** Full signature + issuer verification against this realm's JWKS - null if invalid/expired. */
+    fun verify(token: String): DecodedJWT? = runCatching {
+        val unverified = JWT.decode(token)
+        val jwk = jwkProvider.get(unverified.keyId)
+        val algorithm = Algorithm.RSA256(jwk.publicKey as RSAPublicKey, null)
+        JWT.require(algorithm).withIssuer(issuer).build().verify(token)
+    }.getOrNull()
 
     fun rolesOf(payload: Payload): Set<String> {
         val realmAccess = payload.getClaim("realm_access").asMap() ?: return emptySet()

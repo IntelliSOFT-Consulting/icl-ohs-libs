@@ -22,8 +22,6 @@ dependencies {
     implementation(libs.ktor.server.call.logging)
     implementation(libs.ktor.serialization.kotlinx.json)
 
-    implementation(libs.flyway.core)
-    implementation(libs.flyway.postgresql)
     implementation(libs.logback.classic)
 
     testImplementation(libs.ktor.server.test.host)
