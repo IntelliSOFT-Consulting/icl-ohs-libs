@@ -9,8 +9,12 @@ import ke.intellisoft.icl.auth.audit.AccountLockedException
 import ke.intellisoft.icl.auth.audit.AuditLogService
 import ke.intellisoft.icl.auth.audit.LoginAttemptService
 import ke.intellisoft.icl.auth.client.InvalidCredentialsException
+import ke.intellisoft.icl.auth.client.KeycloakAdminClient
 import ke.intellisoft.icl.auth.client.KeycloakHttpClient
+import ke.intellisoft.icl.auth.client.UsernameAlreadyExistsException
 import ke.intellisoft.icl.auth.config.AuthConfig
+import ke.intellisoft.icl.auth.registration.OtpNotifier
+import ke.intellisoft.icl.auth.registration.RegistrationOtpService
 import ke.intellisoft.icl.auth.security.JwtVerifier
 import ke.intellisoft.icl.auth.session.RefreshTokenFamilyService
 import ke.intellisoft.icl.auth.session.RotationResult
@@ -39,14 +43,64 @@ class IclOHSAuthTest {
         TestDatabase.clearAll()
     }
 
-    private fun authWith(keycloak: KeycloakHttpClient) = IclOHSAuth(
+    private fun authWith(
+        keycloak: KeycloakHttpClient,
+        keycloakAdmin: KeycloakAdminClient = fakeKeycloakAdmin(),
+        otpNotifier: OtpNotifier = OtpNotifier { _, _ -> }
+    ) = IclOHSAuth(
         config = config,
         keycloak = keycloak,
         jwtVerifier = JwtVerifier(TestJwt.jwkProvider(), config.issuerUri),
         auditLogService = AuditLogService(),
         loginAttempts = LoginAttemptService(config.lockoutMaxAttempts, config.lockoutWindowMinutes),
-        refreshTokenFamilies = RefreshTokenFamilyService()
+        refreshTokenFamilies = RefreshTokenFamilyService(),
+        keycloakAdmin = keycloakAdmin,
+        registrationOtps = RegistrationOtpService(config.otpExpiryMinutes, config.otpMaxAttempts, config.otpLength),
+        otpNotifier = otpNotifier
     )
+
+    /** Captures the OTP [IclOHSAuth.register] would otherwise send out, so tests can complete the flow. */
+    private class CapturingOtpNotifier : OtpNotifier {
+        var lastOtp: String? = null
+            private set
+
+        override fun send(destination: String, otp: String) {
+            lastOtp = otp
+        }
+    }
+
+    /** Fake Keycloak Admin REST API - createUser succeeds unless [createUserConflicts]. */
+    private fun fakeKeycloakAdmin(createUserConflicts: Boolean = false): KeycloakAdminClient {
+        val engine = MockEngine { request ->
+            val path = request.url.encodedPath
+            when {
+                path.endsWith("/token") -> respond(
+                    """{"access_token":"admin-token"}""",
+                    HttpStatusCode.OK,
+                    headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                )
+                request.method == HttpMethod.Post && path.endsWith("/users") ->
+                    if (createUserConflicts) respond("", HttpStatusCode.Conflict)
+                    else respond(
+                        "",
+                        HttpStatusCode.Created,
+                        headersOf(HttpHeaders.Location, listOf("${config.authServerUrl}/admin/realms/${config.realm}/users/${UUID.randomUUID()}"))
+                    )
+                request.method == HttpMethod.Get && path.contains("/roles/") -> respond(
+                    """{"id":"role-id","name":"${path.substringAfterLast("/")}"}""",
+                    HttpStatusCode.OK,
+                    headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                )
+                request.method == HttpMethod.Get -> respond(
+                    """{"id":"stub","enabled":false}""",
+                    HttpStatusCode.OK,
+                    headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                )
+                else -> respond("", HttpStatusCode.NoContent)
+            }
+        }
+        return KeycloakAdminClient(config, HttpClient(engine) { install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) } })
+    }
 
     private fun keycloakReturning(vararg tokenResponses: TokenResponse): KeycloakHttpClient {
         val queue = ArrayDeque(tokenResponses.toList())
@@ -173,5 +227,63 @@ class IclOHSAuthTest {
         val token = TestJwt.signedToken(issuer = config.issuerUri, audience = config.clientId, roles = listOf("MOH_ADMIN"))
 
         assertEquals(emptyList(), auth.auditLog(token))
+    }
+
+    @Test
+    fun `register then verifyRegistration enables the account`() {
+        val notifier = CapturingOtpNotifier()
+        val auth = authWith(keycloakReturning(), otpNotifier = notifier)
+
+        auth.register("new.nurse", "password123", "new.nurse@icl.local", "New", "Nurse")
+
+        val otp = requireNotNull(notifier.lastOtp)
+        auth.verifyRegistration("new.nurse", otp)   // does not throw
+    }
+
+    @Test
+    fun `register rejects a username that already exists`() {
+        val auth = authWith(keycloakReturning(), fakeKeycloakAdmin(createUserConflicts = true))
+
+        assertFailsWith<UsernameAlreadyExistsException> {
+            auth.register("demo.nurse", "password123", "demo.nurse@icl.local", "Demo", "Nurse")
+        }
+    }
+
+    @Test
+    fun `verifyRegistration rejects a wrong OTP`() {
+        val auth = authWith(keycloakReturning())
+        auth.register("new.nurse2", "password123", "new.nurse2@icl.local", "New", "Nurse")
+
+        assertFailsWith<InvalidOtpException> { auth.verifyRegistration("new.nurse2", "000000") }
+    }
+
+    @Test
+    fun `updateAccount changes profile fields and password`() {
+        val userId = UUID.randomUUID().toString()
+        val token = TestJwt.signedToken(subject = userId, issuer = config.issuerUri, audience = config.clientId, roles = listOf("FACILITY_NURSE"), username = "demo.nurse")
+        // the password-change path re-verifies currentPassword via a password grant before resetting it
+        val auth = authWith(keycloakReturning(tokenPair(UUID.randomUUID().toString(), UUID.randomUUID().toString(), userId)))
+
+        val profile = auth.updateAccount(token, firstName = "Updated", currentPassword = "old-pass", newPassword = "new-pass")
+
+        assertEquals(userId, profile.sub)
+    }
+
+    @Test
+    fun `updateUserRoles rejects a caller without MOH_ADMIN or SUPER_ADMIN`() {
+        val token = TestJwt.signedToken(issuer = config.issuerUri, audience = config.clientId, roles = listOf("FACILITY_NURSE"))
+        val auth = authWith(keycloakReturning())
+
+        assertFailsWith<InsufficientRoleException> {
+            auth.updateUserRoles(token, UUID.randomUUID().toString(), addRoles = listOf("MOH_ADMIN"))
+        }
+    }
+
+    @Test
+    fun `updateUserRoles succeeds for a caller with MOH_ADMIN`() {
+        val token = TestJwt.signedToken(issuer = config.issuerUri, audience = config.clientId, roles = listOf("MOH_ADMIN"))
+        val auth = authWith(keycloakReturning())
+
+        auth.updateUserRoles(token, UUID.randomUUID().toString(), addRoles = listOf("SUPER_ADMIN"))   // does not throw
     }
 }

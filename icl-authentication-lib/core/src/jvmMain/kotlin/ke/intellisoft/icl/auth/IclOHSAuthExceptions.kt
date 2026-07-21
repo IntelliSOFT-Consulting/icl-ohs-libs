@@ -12,3 +12,6 @@ class InvalidTokenException : RuntimeException("Invalid or expired token.")
 /** The caller's token lacks a role required for this operation. */
 class InsufficientRoleException(requiredRoles: List<String>) :
     RuntimeException("Requires one of: ${requiredRoles.joinToString(", ")}")
+
+/** The presented OTP was wrong, expired, already used, or the attempt cap was exceeded. */
+class InvalidOtpException : RuntimeException("Invalid or expired one-time code.")

@@ -38,6 +38,14 @@
   },
   "users": [
     {
+      "username": "service-account-icl-backend",
+      "enabled": true,
+      "serviceAccountClientId": "icl-backend",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users", "view-realm"]
+      }
+    },
+    {
       "username": "demo.nurse",
       "enabled": true,
       "email": "demo.nurse@icl.local",

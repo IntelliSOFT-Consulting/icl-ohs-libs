@@ -5,7 +5,7 @@ import org.jetbrains.exposed.sql.javatime.timestamp
 
 /**
  * Exposed table definitions mirroring the ohs_auth schema. Migrations themselves are
- * plain SQL run by Flyway (see server/src/main/resources/db/migration) - Exposed here is
+ * plain SQL run by Flyway (see core/src/jvmMain/resources/db/migration) - Exposed here is
  * used only as a typed query layer, not as a schema-generation tool, so the SQL and the
  * Kotlin table objects must be kept in sync by hand.
  */
@@ -39,6 +39,18 @@ object LoginAttempts : Table("ohs_auth.login_attempts") {
     val ipAddress = text("ip_address").nullable()
     val succeeded = bool("succeeded")
     val attemptedAt = timestamp("attempted_at")
+    override val primaryKey = PrimaryKey(id)
+}
+
+object RegistrationOtps : Table("ohs_auth.registration_otp") {
+    val id = long("id").autoIncrement()
+    val keycloakUserId = uuid("keycloak_user_id")
+    val username = text("username")
+    val otpHash = text("otp_hash")
+    val expiresAt = timestamp("expires_at")
+    val attempts = integer("attempts")
+    val consumed = bool("consumed")
+    val createdAt = timestamp("created_at")
     override val primaryKey = PrimaryKey(id)
 }
 

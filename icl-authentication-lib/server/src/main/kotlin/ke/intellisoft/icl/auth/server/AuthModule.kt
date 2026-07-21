@@ -16,11 +16,13 @@ import io.ktor.server.routing.*
 import kotlinx.serialization.json.Json
 import ke.intellisoft.icl.auth.IclOHSAuth
 import ke.intellisoft.icl.auth.InsufficientRoleException
+import ke.intellisoft.icl.auth.InvalidOtpException
 import ke.intellisoft.icl.auth.InvalidTokenException
 import ke.intellisoft.icl.auth.SessionRevokedException
 import ke.intellisoft.icl.auth.TokenReuseDetectedException
 import ke.intellisoft.icl.auth.audit.AccountLockedException
 import ke.intellisoft.icl.auth.client.InvalidCredentialsException
+import ke.intellisoft.icl.auth.client.UsernameAlreadyExistsException
 import ke.intellisoft.icl.auth.config.AuthConfig
 import ke.intellisoft.icl.auth.model.*
 import ke.intellisoft.icl.auth.security.JwtVerifier
@@ -75,6 +77,12 @@ fun Application.authModule(
         exception<InsufficientRoleException> { call, cause ->
             call.respond(HttpStatusCode.Forbidden, ErrorResponse("insufficient_role", cause.message ?: "Insufficient role."))
         }
+        exception<UsernameAlreadyExistsException> { call, cause ->
+            call.respond(HttpStatusCode.Conflict, ErrorResponse("username_already_exists", cause.message ?: "Username already exists."))
+        }
+        exception<InvalidOtpException> { call, cause ->
+            call.respond(HttpStatusCode.BadRequest, ErrorResponse("invalid_otp", cause.message ?: "Invalid or expired one-time code."))
+        }
         exception<ContentTransformationException> { call, cause ->
             call.respond(HttpStatusCode.BadRequest, ErrorResponse("bad_request", cause.message ?: "Malformed request body."))
         }
@@ -108,6 +116,19 @@ fun Application.authModule(
                 call.respond(token)
             }
 
+            post("/register") {
+                val request = call.receive<RegisterRequest>()
+                auth.register(request.username, request.password, request.email, request.firstName, request.lastName)
+                // 202: the account exists but is disabled until /register/verify succeeds.
+                call.respond(HttpStatusCode.Accepted, MessageResponse("Registered. Check your email for a one-time code to verify your account."))
+            }
+
+            post("/register/verify") {
+                val request = call.receive<VerifyRegistrationRequest>()
+                auth.verifyRegistration(request.username, request.otp)
+                call.respond(MessageResponse("Account verified. You can now log in."))
+            }
+
             post("/introspect") {
                 // Outside the `keycloak-jwt` auth plugin by design (Section 12: a downstream
                 // service posts a bearer token here rather than needing its own JWT stack).
@@ -121,6 +142,26 @@ fun Application.authModule(
                 }
 
                 get("/roles") { call.respond(auth.roles()) }
+
+                put("/account") {
+                    val request = call.receive<UpdateAccountRequest>()
+                    val profile = auth.updateAccount(
+                        accessToken = call.bearerToken(),
+                        firstName = request.firstName,
+                        lastName = request.lastName,
+                        email = request.email,
+                        currentPassword = request.currentPassword,
+                        newPassword = request.newPassword
+                    )
+                    call.respond(profile)
+                }
+
+                put("/users/{userId}/roles") {
+                    val targetUserId = call.parameters["userId"]!!
+                    val request = call.receive<UpdateRolesRequest>()
+                    auth.updateUserRoles(call.bearerToken(), targetUserId, request.addRoles, request.removeRoles)
+                    call.respond(HttpStatusCode.NoContent)
+                }
 
                 post("/logout") {
                     val request = call.receive<RefreshRequest>()

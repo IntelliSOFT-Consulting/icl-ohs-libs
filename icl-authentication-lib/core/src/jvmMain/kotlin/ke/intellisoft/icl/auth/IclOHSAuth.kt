@@ -5,6 +5,7 @@ import javax.sql.DataSource
 import ke.intellisoft.icl.auth.audit.AuditLogService
 import ke.intellisoft.icl.auth.audit.LoginAttemptService
 import ke.intellisoft.icl.auth.client.InvalidCredentialsException
+import ke.intellisoft.icl.auth.client.KeycloakAdminClient
 import ke.intellisoft.icl.auth.client.KeycloakHttpClient
 import ke.intellisoft.icl.auth.config.AuthConfig
 import ke.intellisoft.icl.auth.model.AuditLogEntryDto
@@ -15,6 +16,9 @@ import ke.intellisoft.icl.auth.model.UserProfile
 import ke.intellisoft.icl.auth.persistence.DatabaseFactory
 import ke.intellisoft.icl.auth.policy.AudiencePolicy
 import ke.intellisoft.icl.auth.policy.RolePolicy
+import ke.intellisoft.icl.auth.registration.LoggingOtpNotifier
+import ke.intellisoft.icl.auth.registration.OtpNotifier
+import ke.intellisoft.icl.auth.registration.RegistrationOtpService
 import ke.intellisoft.icl.auth.security.JwtVerifier
 import ke.intellisoft.icl.auth.session.RefreshTokenFamilyService
 import ke.intellisoft.icl.auth.session.RotationResult
@@ -40,7 +44,10 @@ class IclOHSAuth(
     private val jwtVerifier: JwtVerifier = JwtVerifier(config),
     private val auditLogService: AuditLogService = AuditLogService(),
     private val loginAttempts: LoginAttemptService = LoginAttemptService(config.lockoutMaxAttempts, config.lockoutWindowMinutes),
-    private val refreshTokenFamilies: RefreshTokenFamilyService = RefreshTokenFamilyService()
+    private val refreshTokenFamilies: RefreshTokenFamilyService = RefreshTokenFamilyService(),
+    private val keycloakAdmin: KeycloakAdminClient = KeycloakAdminClient(config),
+    private val registrationOtps: RegistrationOtpService = RegistrationOtpService(config.otpExpiryMinutes, config.otpMaxAttempts, config.otpLength),
+    private val otpNotifier: OtpNotifier = LoggingOtpNotifier
 ) {
 
     /** Runs this library's Flyway migrations against [dataSource], then connects Exposed to it. */
@@ -176,6 +183,70 @@ class IclOHSAuth(
     }
 
     fun roles(): List<String> = config.defaultRoles
+
+    /**
+     * Creates a disabled Keycloak user and sends an OTP to [email]; the account stays
+     * disabled until [verifyRegistration] succeeds. Throws [ke.intellisoft.icl.auth.client.UsernameAlreadyExistsException]
+     * if the username/email is already taken.
+     */
+    fun register(username: String, password: String, email: String, firstName: String, lastName: String) {
+        val userId = runBlocking { keycloakAdmin.createUser(username, email, firstName, lastName, enabled = false) }
+        runBlocking { keycloakAdmin.resetPassword(userId, password) }
+        val otp = registrationOtps.generateAndStore(UUID.fromString(userId), username)
+        otpNotifier.send(email, otp)
+        auditLogService.record("REGISTRATION_STARTED", UUID.fromString(userId), config.realm)
+    }
+
+    /** Verifies the OTP sent during [register] and enables the account. Throws [InvalidOtpException] otherwise. */
+    fun verifyRegistration(username: String, otp: String) {
+        if (!registrationOtps.verify(username, otp)) throw InvalidOtpException()
+        val userId = registrationOtps.keycloakUserIdFor(username)
+        runBlocking { keycloakAdmin.setEnabled(userId.toString(), enabled = true) }
+        auditLogService.record("REGISTRATION_VERIFIED", userId, config.realm)
+    }
+
+    /**
+     * Self-service update of the caller's own profile fields and/or password. Passing
+     * [newPassword] requires [currentPassword] to prove ownership (verified against
+     * Keycloak, same as [login]) before the password is changed.
+     */
+    fun updateAccount(
+        accessToken: String,
+        firstName: String? = null,
+        lastName: String? = null,
+        email: String? = null,
+        currentPassword: String? = null,
+        newPassword: String? = null
+    ): UserProfile {
+        val principal = verifiedPrincipal(accessToken)
+        val userId = principal.subject
+
+        if (firstName != null || lastName != null || email != null) {
+            runBlocking { keycloakAdmin.updateProfile(userId, firstName, lastName, email) }
+        }
+        if (newPassword != null) {
+            requireNotNull(currentPassword) { "currentPassword is required to change the password" }
+            val username = principal.getClaim("preferred_username").asString()
+            runBlocking { keycloak.passwordGrant(username, currentPassword) }
+            runBlocking { keycloakAdmin.resetPassword(userId, newPassword) }
+        }
+
+        auditLogService.record("ACCOUNT_UPDATED", UUID.fromString(userId), config.realm)
+        return profile(accessToken)
+    }
+
+    /**
+     * Admin-only: adds/removes realm roles on [targetUserId]. Requires the caller's own
+     * token to carry `MOH_ADMIN`/`SUPER_ADMIN`, same gate as [auditLog].
+     */
+    fun updateUserRoles(accessToken: String, targetUserId: String, addRoles: List<String> = emptyList(), removeRoles: List<String> = emptyList()) {
+        val principal = verifiedPrincipal(accessToken)
+        if (!RolePolicy.isAllowed(AUDIT_ROLES, jwtVerifier.rolesOf(principal))) throw InsufficientRoleException(AUDIT_ROLES)
+
+        addRoles.forEach { runBlocking { keycloakAdmin.addRealmRole(targetUserId, it) } }
+        removeRoles.forEach { runBlocking { keycloakAdmin.removeRealmRole(targetUserId, it) } }
+        auditLogService.record("ROLES_UPDATED", UUID.fromString(targetUserId), config.realm)
+    }
 
     /** Signature + issuer + audience check - the in-process equivalent of Ktor's `keycloak-jwt` auth plugin. */
     private fun verifiedPrincipal(accessToken: String): DecodedJWT {

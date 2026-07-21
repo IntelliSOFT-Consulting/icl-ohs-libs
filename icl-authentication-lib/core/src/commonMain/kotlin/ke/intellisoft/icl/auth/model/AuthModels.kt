@@ -67,6 +67,33 @@ data class IntrospectRequest(val token: String)
 data class IntrospectResponse(val active: Boolean, val sub: String? = null, val roles: List<String> = emptyList())
 
 @Serializable
+data class RegisterRequest(
+    val username: String,
+    val password: String,
+    val email: String,
+    @SerialName("first_name") val firstName: String,
+    @SerialName("last_name") val lastName: String
+)
+
+@Serializable
+data class VerifyRegistrationRequest(val username: String, val otp: String)
+
+@Serializable
+data class UpdateAccountRequest(
+    @SerialName("first_name") val firstName: String? = null,
+    @SerialName("last_name") val lastName: String? = null,
+    val email: String? = null,
+    @SerialName("current_password") val currentPassword: String? = null,
+    @SerialName("new_password") val newPassword: String? = null
+)
+
+@Serializable
+data class UpdateRolesRequest(
+    @SerialName("add_roles") val addRoles: List<String> = emptyList(),
+    @SerialName("remove_roles") val removeRoles: List<String> = emptyList()
+)
+
+@Serializable
 data class AuditLogEntryDto(
     val id: Long,
     val event: String,
