@@ -1,11 +1,11 @@
 {
   "info": {
     "name": "icl-authentication-lib",
-    "description": "Every /auth endpoint against a running instance. Bring up infra first with scripts/setup-and-test.sh (or docker compose up -d postgres keycloak + ./gradlew :server:run). Uses the demo user seeded by realm-export/icl-realm.json (demo.nurse / demo1234).",
+    "description": "Every /auth endpoint against a running instance. Bring up infra first with scripts/setup-and-test.sh (or docker compose up -d postgres keycloak + ./gradlew :server:run). Uses the demo user seeded by realm-export/icl-realm.json (demo.nurse / demo1234). base_url's port must match PORT in your .env (defaults to 8080 in .env.sample, but check your own .env - it's overridable per environment).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "base_url", "value": "http://localhost:8080", "type": "string" },
+    { "key": "base_url", "value": "http://localhost:8090", "type": "string" },
     { "key": "access_token", "value": "", "type": "string" },
     { "key": "refresh_token", "value": "", "type": "string" }
   ],
@@ -146,6 +146,32 @@
               "raw": "{{base_url}}/auth/roles",
               "host": ["{{base_url}}"],
               "path": ["auth", "roles"]
+            }
+          }
+        },
+        {
+          "name": "Sessions - with token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('response is an array', () => pm.expect(body).to.be.an('array'));",
+                  "pm.test('current session is present', () => pm.expect(body.some(s => s.current)).to.eql(true));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{access_token}}" }],
+            "url": {
+              "raw": "{{base_url}}/auth/sessions",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "sessions"]
             }
           }
         },
